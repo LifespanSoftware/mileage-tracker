@@ -146,6 +146,7 @@ function describe({ action, target, detail }) {
     case 'backup.create': return `Made a backup${target ? ` (${target})` : ''}`;
     case 'backup.download': return `Downloaded the backup ${target}`;
     case 'backup.restore': return `Restored the database from ${target}`;
+    case 'backup.settings': return `Set backups to keep to ${detail?.keep} (was ${detail?.before})${detail?.removed ? `, deleting ${detail.removed} older ${detail.removed === 1 ? 'backup' : 'backups'}` : ''}`;
     case 'auth.password_change': return `${target} changed their password`;
     case 'auth.password_reset_request': return `A password reset email was sent to ${target}`;
     case 'auth.password_reset': return `${target} set a new password from a reset email`;
@@ -208,6 +209,22 @@ export function BackupsScreen({ back }) {
   const [busy, setBusy] = useState(false);
   const [restoring, setRestoring] = useState(null);
   const [confirmText, setConfirmText] = useState('');
+  const [keep, setKeep] = useState('');
+  useEffect(() => { if (data) setKeep(String(data.config.keep)); }, [data?.config.keep]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function saveKeep(e) {
+    e.preventDefault();
+    const n = Number(keep);
+    const stored = data.backups.filter((b) => b.status === 'ok' && b.target === 'local').length;
+    if (n < data.config.keep && stored > n && !confirm(`Keep only the newest ${n}? Older backups will be deleted now and can't be brought back.`)) return;
+    setBusy(true);
+    try {
+      const res = await api('PUT', '/backups/settings', { keep: n });
+      toast(res.removed ? `Saved. ${plural(res.removed, 'older backup')} deleted.` : 'Saved');
+      reload();
+    } catch (err) { toast(errText(err), 'error'); } finally { setBusy(false); }
+  }
+  const keepValid = /^\d+$/.test(keep) && Number(keep) >= 1 && Number(keep) <= (data?.config.maxKeep || 365);
 
   async function backupNow(targets) {
     setBusy(true);
@@ -242,7 +259,6 @@ export function BackupsScreen({ back }) {
         <section className="panel">
           <p>
             Automatic backups: <strong>{cfg.schedule}</strong>, to {cfg.defaultTargets.map((t) => targetName[t]).join(' and ')}.
-            The newest {cfg.keep} are kept in each place.
           </p>
           <p className="muted small">Server folder: {cfg.localDir}. S3: {cfg.s3 ? 'configured' : 'not configured'}.</p>
           <div className="btn-row wrap">
@@ -253,6 +269,13 @@ export function BackupsScreen({ back }) {
               <button type="button" className="btn btn-quiet" disabled={busy} onClick={() => backupNow(['local', 's3'])}>Back up to both</button>
             )}
           </div>
+          <form className="mt" onSubmit={saveKeep} noValidate>
+            <Field label="Backups to keep" hint={`In each place. When there are more, the oldest are deleted. 1 to ${cfg.maxKeep}.`}
+              error={keep !== '' && !keepValid ? `Enter a whole number from 1 to ${cfg.maxKeep}` : null}>
+              {(id) => <input id={id} inputMode="numeric" autoComplete="off" value={keep} onChange={(e) => setKeep(e.target.value.trim())} />}
+            </Field>
+            <button type="submit" className="btn btn-quiet" disabled={busy || !keepValid || Number(keep) === cfg.keep}>Save</button>
+          </form>
         </section>
       )}
       {data && (

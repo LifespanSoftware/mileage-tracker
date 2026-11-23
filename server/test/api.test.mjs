@@ -92,15 +92,34 @@ const dl = await fetch(B + `/api/backups/${good.id}/download`, { headers: { auth
 const buf = Buffer.from(await dl.arrayBuffer());
 ok(dl.status === 200 && buf.slice(0, 5).toString() === 'PGDMP', 'backup downloads as a pg_dump file');
 
+// How many to keep
+ok(list.j.config.keep === 30, 'keeps 30 backups unless told otherwise');
+ok((await call('PUT', '/api/backups/settings', { keep: 2 }, dave3)).s === 403, 'only admins change how many backups are kept');
+for (const bad of [0, 2.5, 'lots', 366]) ok((await call('PUT', '/api/backups/settings', { keep: bad }, admin)).s === 400, `keep ${bad} refused`);
+for (let i = 0; i < 3; i++) await call('POST', '/api/backups', {}, admin);
+const okBackups = async () => (await call('GET', '/api/backups', null, admin)).j.backups.filter((b) => b.status === 'ok');
+ok((await okBackups()).length === 4, 'four backups before the limit is lowered');
+r = await call('PUT', '/api/backups/settings', { keep: 2 }, admin);
+ok(r.s === 200 && r.j.keep === 2 && r.j.removed === 2, 'lowering the number deletes the oldest straight away');
+let kept = await okBackups();
+ok(kept.length === 2 && !kept.some((b) => b.id === good.id), 'deleted backups leave the history; the newest stay');
+ok((await fetch(B + `/api/backups/${good.id}/download`, { headers: { authorization: 'Bearer ' + admin } })).status === 404, 'a deleted backup can no longer be downloaded');
+await call('POST', '/api/backups', {}, admin);
+kept = await okBackups();
+ok(kept.length === 2 && (await call('GET', '/api/backups', null, admin)).j.config.keep === 2, 'each new backup pushes out the oldest');
+const restoreFrom = kept[0];
+
 // Change data, then restore
 await call('POST', '/api/sync', { epoch, cursor: 0, trips: [{ id: uuid(), tripDate: '2026-10-10', miles: 5, description: 'after backup', updatedAt: new Date().toISOString() }] }, dave3);
-ok((await call('POST', `/api/backups/${good.id}/restore`, { confirm: 'nope' }, admin)).s === 400, 'restore needs typed confirmation');
-r = await call('POST', `/api/backups/${good.id}/restore`, { confirm: 'RESTORE' }, admin);
+ok((await call('POST', `/api/backups/${restoreFrom.id}/restore`, { confirm: 'nope' }, admin)).s === 400, 'restore needs typed confirmation');
+ok((await call('PUT', '/api/backups/settings', { keep: 1 }, admin)).j.removed === 1, 'keeping one leaves only the newest');
+r = await call('POST', `/api/backups/${restoreFrom.id}/restore`, { confirm: 'RESTORE' }, admin);
 ok(r.s === 200, 'restore succeeded ' + JSON.stringify(r.j));
 const dave4 = (await call('POST', '/api/auth/login', { username: 'dave', password: 'resetpass9' })).j.token;
 r = await call('POST', '/api/sync', { epoch, cursor: 999999 }, dave4);
 ok(r.j.reset === true && !r.j.trips.some((t) => t.description === 'after backup') && r.j.trips.length === 2, 'after restore devices get reset + restored data');
 const list2 = await call('GET', '/api/backups', null, admin);
+ok(list2.j.config.keep === 1, 'restoring works when only one backup is kept, and does not put the number back');
 ok(list2.j.backups.some((b) => /before restore/.test(b.createdBy)) && list2.j.backups.some((b) => b.status === 'restored'), 'backup log survives restore incl. safety backup');
 
 // Static / misc

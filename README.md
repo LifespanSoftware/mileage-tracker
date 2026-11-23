@@ -1,6 +1,6 @@
 # Mileage Tracker
 
-[![Version](https://img.shields.io/badge/version-1.1.0-blue)](CHANGELOG.md) [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Version](https://img.shields.io/badge/version-1.2.0-blue)](CHANGELOG.md) [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 A self-hosted, mobile-first app for logging business mileage and producing monthly claim PDFs.
 
@@ -79,7 +79,7 @@ All settings are read from `.env` (see `.env.example` for the full list with def
 | `DOMAIN` | HTTPS profile only | — | Public domain for the Caddy HTTPS profile |
 | `BACKUP_TARGET` | no | `local` | `local`, `s3` or `both` |
 | `BACKUP_TIME` | no | `02:00` | Daily backup time, or `off` |
-| `BACKUP_KEEP` | no | `30` | Backups kept per location |
+| `BACKUP_KEEP` | no | `30` | Backups kept per location, until an admin sets the number in Settings → Backups |
 | `S3_BUCKET`, `S3_PREFIX`, `S3_REGION`, `S3_ENDPOINT`, `S3_FORCE_PATH_STYLE`, `S3_SSE`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | only if using S3 | — | S3 (or S3-compatible) backup storage |
 
 \* `docker-compose.yml` builds `DATABASE_URL` for you from `POSTGRES_PASSWORD`; it only needs setting by hand when running the server outside Docker (see [Development](#development)).
@@ -125,11 +125,13 @@ Configure in `.env`:
 | --- | --- |
 | `BACKUP_TARGET` | `local`, `s3` or `both` |
 | `BACKUP_TIME` | Daily time, e.g. `02:00` (uses `TZ`). `off` to disable. |
-| `BACKUP_KEEP` | Number of backups kept in each place (oldest removed) |
+| `BACKUP_KEEP` | Number of backups kept in each place (oldest deleted). Only the starting value: once an admin sets "Backups to keep" in the app, that number is used instead |
 | `S3_BUCKET`, `S3_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | S3 settings |
 | `S3_ENDPOINT`, `S3_FORCE_PATH_STYLE` | For Backblaze B2, Wasabi, Cloudflare R2, MinIO and others |
 
 Local backups live in the `backups` Docker volume. From **Settings → Backups** an admin can back up now, download any backup, or restore one (type `RESTORE` to confirm; a safety backup of the current data is taken first).
+
+**Backups to keep** on that screen sets how many are kept in each place (1 to 365). When there are more, the oldest are deleted: after every backup, and straight away when you lower the number. Deleted backups can't be brought back, and they leave the history list.
 
 Restore from the command line instead:
 
@@ -226,6 +228,7 @@ DOKPLOY.md         Dokploy deployment guide
 | GET / POST | `/api/users` | admin |
 | PATCH / DELETE | `/api/users/:id` | admin |
 | GET / POST | `/api/backups` | admin |
+| PUT | `/api/backups/settings` | admin |
 | GET | `/api/backups/:id/download` | admin |
 | POST | `/api/backups/:id/restore` | admin |
 | GET | `/api/audit` | admin |
@@ -234,7 +237,7 @@ There is intentionally no sign-up endpoint.
 
 ## Troubleshooting
 
-- **Which version am I running?** It's shown at the bottom of Settings in the app, and `GET /api/health` returns `{"ok":true,"version":"1.1.0"}`. Useful when reporting an issue.
+- **Which version am I running?** It's shown at the bottom of Settings in the app, and `GET /api/health` returns `{"ok":true,"version":"1.2.0"}`. Useful when reporting an issue.
 - **Can't sign in / don't know the admin password:** see [Admin tasks](#admin-tasks) above to reset it from the command line.
 - **Site won't load after `docker compose up`:** check `docker compose logs app` and `docker compose logs db`. The app waits for Postgres to report healthy before starting.
 - **Phone won't install the app or work offline:** this needs HTTPS — see [HTTPS (needed on phones)](#https-needed-on-phones). Plain HTTP only works for browser testing.

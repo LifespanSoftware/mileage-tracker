@@ -13,6 +13,7 @@ import {
 } from './auth.js';
 import {
   runBackup, restoreBackup, fetchBackupFile, defaultTargets, s3Configured, BACKUP_DIR, backupSchedule,
+  getKeep, setKeep, pruneBackups, MAX_KEEP,
 } from './backup.js';
 
 export const api = createRouter();
@@ -562,7 +563,7 @@ api.get('/api/backups', async (req) => {
   return {
     config: {
       defaultTargets: defaultTargets(), s3: s3Configured(), localDir: BACKUP_DIR,
-      schedule: backupSchedule(), keep: Number(process.env.BACKUP_KEEP || 30),
+      schedule: backupSchedule(), keep: await getKeep(), maxKeep: MAX_KEEP,
     },
     backups: rows.map((b) => ({
       id: b.id, filename: b.filename, target: b.target, location: b.location,
@@ -570,6 +571,20 @@ api.get('/api/backups', async (req) => {
       createdBy: b.created_by, createdAt: b.created_at,
     })),
   };
+});
+
+/** Change how many backups are kept in each place. Older ones are deleted straight away. */
+api.put('/api/backups/settings', async (req) => {
+  const me = await authenticateAdmin(req);
+  const keep = Number(req.body.keep);
+  if (!Number.isInteger(keep) || keep < 1 || keep > MAX_KEEP) throw new HttpError(400, `Keep between 1 and ${MAX_KEEP} backups`);
+  return exclusive(async () => {
+    const before = await getKeep();
+    await setKeep(keep);
+    const removed = await pruneBackups();
+    if (keep !== before || removed) await audit(me, 'backup.settings', { detail: { keep, before, removed }, ip: req.ip });
+    return { keep, removed };
+  });
 });
 
 api.post('/api/backups', async (req) => {
@@ -602,7 +617,8 @@ api.post('/api/backups/:id/restore', async (req) => {
   const b = await findBackup(req.params.id);
   return exclusive(async () => {
     // Safety net: snapshot the current data first so a restore can itself be undone.
-    const pre = await runBackup({ targets: defaultTargets(), createdBy: `${me.username} (before restore)` });
+    // Nothing is deleted to make room for it: with a low limit that could be the very backup being restored.
+    const pre = await runBackup({ targets: defaultTargets(), createdBy: `${me.username} (before restore)`, prune: false });
     if (!pre.some((r) => r.status === 'ok')) throw new HttpError(500, 'Could not take a safety backup, restore cancelled');
     await restoreBackup(b);
     await audit(me, 'backup.restore', { target: b.filename, ip: req.ip });

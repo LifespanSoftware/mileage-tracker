@@ -7,6 +7,23 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-23
+
+### Added
+
+- "Backups to keep" on the Backups screen. An admin sets how many backups are
+  kept in each place (1 to 365); the oldest beyond that are deleted after each
+  backup, and straight away when the number is lowered. `BACKUP_KEEP` is now
+  only the starting value. The change is recorded in the activity log and is
+  not undone by restoring an older backup.
+
+### Fixed
+
+- Backups that had been deleted to make room still showed in the history with
+  Download and Restore buttons that failed. They now leave the list.
+- With a low number of backups to keep, the safety backup taken before a
+  restore could delete the backup being restored.
+
 ## [1.1.0] - 2026-11-12
 
 ### Added
@@ -119,6 +136,7 @@ First tagged release.
   container port `3001`, while the app actually listens on `3000`; the quick
   start now works out of the box (`3000:3000`).
 
-[Unreleased]: https://github.com/christopherdally/mileage-tracker/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/christopherdally/mileage-tracker/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/christopherdally/mileage-tracker/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/christopherdally/mileage-tracker/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/christopherdally/mileage-tracker/releases/tag/v1.0.0

@@ -1,5 +1,5 @@
 // Drives the real app in a browser: sign in, vehicles, journeys, receipt scan, report exports, CSV import, second device,
-// two-step sign-in, password reset by email and the activity log.
+// two-step sign-in, password reset by email, backups and the activity log.
 // Needs a server on an EMPTY database with ADMIN_PASSWORD, APP_URL, SMTP_HOST=127.0.0.1 and SMTP_PORT set
 // and ADMIN_USERNAME unset (run.mjs does this):
 //   BASE=http://localhost:3000 ADMIN_PASSWORD=... SMTP_PORT=... node e2e/app.test.mjs
@@ -42,6 +42,14 @@ async function signIn(page, password) {
   await page.getByLabel('Email or username').fill('admin@example.com');
   await page.getByLabel('Password').fill(password);
   await page.getByRole('button', { name: 'Sign in' }).click();
+}
+/** Wait until a locator matches exactly n elements. */
+async function assertCount(locator, n) {
+  const deadline = Date.now() + 15000;
+  while ((await locator.count()) !== n) {
+    if (Date.now() > deadline) assert.fail(`expected ${n} matches, found ${await locator.count()}`);
+    await new Promise((r) => setTimeout(r, 100));
+  }
 }
 const tab = (page, name) => page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name }).click();
 const synced = async (page) => {
@@ -286,6 +294,27 @@ try {
   await laptop.getByText('Your session ended').waitFor();
   step('password reset by email, then sign-in with a recovery code');
 
+  // ── Backups: keep only so many ──
+  await tab(tablet, 'Settings');
+  await tablet.getByRole('button', { name: 'Backups Back up and restore' }).click();
+  const downloads = tablet.locator('.backups').getByRole('button', { name: 'Download' });
+  for (const n of [1, 2, 3]) {
+    await tablet.getByRole('button', { name: 'Back up now' }).click();
+    await assertCount(downloads, n);
+  }
+  assert.equal(await tablet.getByLabel('Backups to keep').inputValue(), '30');
+  await tablet.getByLabel('Backups to keep').fill('0');
+  await tablet.getByText('Enter a whole number from 1 to 365').waitFor();
+  await tablet.getByLabel('Backups to keep').fill('2');
+  tablet.once('dialog', (d) => { assert.match(d.message(), /Keep only the newest 2\?/); d.accept(); });
+  await tablet.getByRole('button', { name: 'Save' }).click();
+  await tablet.getByText('Saved. 1 older backup deleted.').waitFor();
+  await assertCount(downloads, 2);
+  await tablet.getByRole('button', { name: 'Back up now' }).click();
+  await tablet.getByText('Backup complete').last().waitFor();
+  await assertCount(downloads, 2);
+  step('backups beyond the number to keep are deleted');
+
   // ── Activity log ──
   await tab(tablet, 'Settings');
   await tablet.getByRole('button', { name: 'Activity log' }).click();
@@ -293,7 +322,8 @@ try {
   await log.filter({ hasText: 'admin@example.com signed in with a recovery code' }).waitFor();
   await log.filter({ hasText: 'admin@example.com set a new password from a reset email' }).waitFor();
   await log.filter({ hasText: 'admin@example.com turned on two-step sign-in' }).waitFor();
-  step('activity log shows the security changes');
+  await log.filter({ hasText: 'Set backups to keep to 2 (was 30), deleting 1 older backup' }).waitFor();
+  step('activity log shows the security and backup changes');
 
   assert.deepEqual(problems, [], 'no browser errors, blocked requests or requests to other origins');
   console.log('\nALL PASSED');

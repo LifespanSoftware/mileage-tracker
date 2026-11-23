@@ -10,7 +10,18 @@ import { query, migrate } from './db.js';
 
 const env = process.env;
 export const BACKUP_DIR = path.resolve(env.BACKUP_DIR || '/backups');
-const KEEP = Math.max(1, Number(env.BACKUP_KEEP || 30));
+export const MAX_KEEP = 365;
+const clampKeep = (n) => Math.min(MAX_KEEP, Math.max(1, Math.floor(Number(n)) || 30));
+
+/** How many backups to keep in each place: the number set on the Backups screen, else BACKUP_KEEP, else 30. */
+export async function getKeep() {
+  const { rows } = await query("SELECT value FROM meta WHERE key='backup_keep'");
+  return clampKeep(rows[0]?.value ?? env.BACKUP_KEEP);
+}
+
+export async function setKeep(n) {
+  await query(`INSERT INTO meta (key, value) VALUES ('backup_keep', $1) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value`, [String(clampKeep(n))]);
+}
 
 /** BACKUP_TARGET = local | s3 | both */
 export function defaultTargets() {
@@ -58,25 +69,43 @@ async function record(row) {
   );
 }
 
-async function pruneLocal() {
+// Names sort by time, so the oldest come first. Deleted backups also leave the history list,
+// which only offers Download and Restore for files that still exist.
+const forget = (target, filenames) => (filenames.length
+  ? query("DELETE FROM backups WHERE target=$1 AND status='ok' AND filename = ANY($2)", [target, filenames])
+  : null);
+
+async function pruneLocal(keep) {
   const files = (await fsp.readdir(BACKUP_DIR)).filter((f) => /^mileage-.*\.dump$/.test(f)).sort();
-  for (const f of files.slice(0, Math.max(0, files.length - KEEP))) {
-    await fsp.unlink(path.join(BACKUP_DIR, f)).catch(() => {});
-  }
+  const old = files.slice(0, Math.max(0, files.length - keep));
+  for (const f of old) await fsp.unlink(path.join(BACKUP_DIR, f)).catch(() => {});
+  await forget('local', old);
+  return old.length;
 }
 
-async function pruneS3() {
+async function pruneS3(keep) {
   const { m, c } = await s3();
   const list = await c.send(new m.ListObjectsV2Command({ Bucket: env.S3_BUCKET, Prefix: s3Prefix() }));
   const keys = (list.Contents || []).map((o) => o.Key).filter((k) => /mileage-.*\.dump$/.test(k)).sort();
-  const old = keys.slice(0, Math.max(0, keys.length - KEEP));
+  const old = keys.slice(0, Math.max(0, keys.length - keep));
   if (old.length) {
     await c.send(new m.DeleteObjectsCommand({ Bucket: env.S3_BUCKET, Delete: { Objects: old.map((Key) => ({ Key })) } }));
   }
+  await forget('s3', old.map((k) => path.posix.basename(k)));
+  return old.length;
+}
+
+/** Delete backups beyond the number to keep, in every place that is in use. Returns how many went. */
+export async function pruneBackups() {
+  const keep = await getKeep();
+  let removed = 0;
+  if (fs.existsSync(BACKUP_DIR)) removed += await pruneLocal(keep);
+  if (s3Configured()) removed += await pruneS3(keep);
+  return removed;
 }
 
 /** Dump the whole database (pg_dump custom format, compressed) and store it in each target. */
-export async function runBackup({ targets = defaultTargets(), createdBy = 'schedule' } = {}) {
+export async function runBackup({ targets = defaultTargets(), createdBy = 'schedule', prune = true } = {}) {
   // Millisecond timestamp plus a random suffix: names sort chronologically and can never collide.
   const stamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 23);
   const filename = `mileage-${stamp}-${crypto.randomBytes(3).toString('hex')}.dump`;
@@ -94,6 +123,7 @@ export async function runBackup({ targets = defaultTargets(), createdBy = 'sched
     return results;
   }
   const size = (await fsp.stat(tmp)).size;
+  const keep = await getKeep();
 
   for (const target of targets) {
     const row = { filename, target, size, createdBy };
@@ -102,7 +132,7 @@ export async function runBackup({ targets = defaultTargets(), createdBy = 'sched
         await fsp.mkdir(BACKUP_DIR, { recursive: true });
         row.location = path.join(BACKUP_DIR, filename);
         await fsp.copyFile(tmp, row.location, fs.constants.COPYFILE_EXCL);
-        await pruneLocal();
+        if (prune) await pruneLocal(keep);
       } else if (target === 's3') {
         if (!s3Configured()) throw new Error('S3_BUCKET is not set');
         const { m, c } = await s3();
@@ -112,7 +142,7 @@ export async function runBackup({ targets = defaultTargets(), createdBy = 'sched
           ContentType: 'application/octet-stream', ServerSideEncryption: env.S3_SSE || undefined,
         }));
         row.location = `s3://${env.S3_BUCKET}/${Key}`;
-        await pruneS3();
+        if (prune) await pruneS3(keep);
       } else {
         throw new Error(`Unknown backup target "${target}"`);
       }
@@ -152,6 +182,8 @@ export async function restoreBackup(b) {
   const { rows: log } = await query('SELECT * FROM backups ORDER BY id');
   // Likewise the activity log: a restore must not erase the record of what was done since the backup.
   const { rows: activity } = await query('SELECT * FROM audit_log ORDER BY id');
+  // And how many backups to keep: restoring old data shouldn't quietly change what gets deleted.
+  const keep = await getKeep();
   try {
     await run('pg_restore', ['--clean', '--if-exists', '--no-owner', '--no-privileges', '--single-transaction',
       '--dbname', env.DATABASE_URL, file.path]);
@@ -166,6 +198,7 @@ export async function restoreBackup(b) {
       );
     }
     await query("SELECT setval(pg_get_serial_sequence('backups','id'), GREATEST((SELECT max(id) FROM backups), 1))");
+    await setKeep(keep);
     await query('TRUNCATE audit_log');
     for (const r of activity) {
       await query('INSERT INTO audit_log (id,at,actor,action,target,detail,ip) VALUES ($1,$2,$3,$4,$5,$6,$7)',

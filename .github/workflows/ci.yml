@@ -84,6 +84,11 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      # The backup part of the test runs pg_dump, which must match the database's major version.
+      - name: Install PostgreSQL 16 client tools
+        run: |
+          pg_dump --version | grep -q ' 16\.' || { sudo apt-get update && sudo apt-get install -y postgresql-client-16; }
+          pg_dump --version
       - name: Build the client
         working-directory: client
         run: npm install --no-audit --no-fund && npm run build

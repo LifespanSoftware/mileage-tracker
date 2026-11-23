@@ -8,11 +8,13 @@ import { limitAttempts, refuseIfOver, hit, clearAttempts } from './ratelimit.js'
 import { newSecret, verifyCode, otpauthUri } from './totp.js';
 import { mailConfigured, appUrl, sendMail } from './mail.js';
 import { audit } from './audit.js';
+import { logError } from './errors.js';
 import {
   authenticate, authenticateAdmin, hashPassword, verifyPassword, signToken, publicUser, DUMMY_HASH,
 } from './auth.js';
 import {
   runBackup, restoreBackup, fetchBackupFile, defaultTargets, s3Configured, BACKUP_DIR, backupSchedule,
+  getKeep, setKeep, pruneBackups, MAX_KEEP, deleteBackupFile, exclusive,
 } from './backup.js';
 
 export const api = createRouter();
@@ -54,22 +56,34 @@ async function checkSecondStep(user, code) {
   return null;
 }
 
-api.post('/api/auth/login', async ({ body, ip }) => {
+/**
+ * Check a username, password and (if the account uses it) two-step code, with the usual attempt limits.
+ * Returns { user }, or { error, twoFactorRequired } when it isn't enough to sign in. Used by the app's
+ * sign-in and by the connector's sign-in page.
+ */
+export async function checkSignIn({ username: rawName, password: rawPassword, code, ip }) {
   await limitAttempts(`login:${ip}`, LOGIN_LIMIT);
-  const username = str(body.username, 100).trim().toLowerCase();
-  const password = String(body.password || '');
+  const username = str(rawName, 100).trim().toLowerCase();
+  const password = String(rawPassword || '');
   if (!username || !password) throw new HttpError(400, 'Enter your username and password');
   const { rows } = await query('SELECT * FROM users WHERE username = $1', [username]);
   const user = rows[0];
   const ok = await verifyPassword(password, user?.password_hash || DUMMY_HASH);
-  if (!user || !ok || !user.is_active) throw new HttpError(401, 'Wrong username or password');
+  if (!user || !ok || !user.is_active) return { error: 'Wrong username or password' };
   if (user.totp_enabled) {
-    // An error status, so a copy of the app from before two-step sign-in shows the message rather than signing in.
-    if (!body.code) return { status: 401, body: { error: 'Enter the code from your authenticator app', twoFactorRequired: true } };
-    const used = await checkSecondStep(user, body.code);
-    if (!used) return { status: 401, body: { error: "That code isn't right. Check the app and try again.", twoFactorRequired: true } };
+    if (!code) return { error: 'Enter the code from your authenticator app', twoFactorRequired: true };
+    const used = await checkSecondStep(user, code);
+    if (!used) return { error: "That code isn't right. Check the app and try again.", twoFactorRequired: true };
     if (used === 'recovery') await audit(user, 'auth.recovery_code_used', { target: user.username, ip });
   }
+  return { user };
+}
+
+api.post('/api/auth/login', async ({ body, ip }) => {
+  const { user, error, twoFactorRequired } = await checkSignIn({ ...body, ip });
+  // An error status, so a copy of the app from before two-step sign-in shows the message rather than signing in.
+  if (twoFactorRequired) return { status: 401, body: { error, twoFactorRequired: true } };
+  if (error) throw new HttpError(401, error);
   return { token: signToken(user), user: publicUser(user) };
 });
 
@@ -97,7 +111,7 @@ api.post('/api/auth/forgot', async ({ body, ip }) => {
       text: `Someone asked to reset the password for ${user.username} on Mileage Tracker.\n\n`
         + `Choose a new password here (the link works once, for ${RESET_TTL_MINUTES} minutes):\n${appUrl()}/#reset?token=${token}\n\n`
         + "If that wasn't you, ignore this email and your password stays as it is.\n",
-    }).catch((e) => console.error('Could not send the password reset email:', e.message));
+    }).catch((e) => { console.error('Could not send the password reset email:', e.message); logError('job', e, { job: 'password reset email' }); });
   }
   return { ok: true };
 });
@@ -506,6 +520,19 @@ api.post('/api/sync', async (req) => {
   return { ...out, rejected };
 });
 
+// ───────────────────────── Errors in the app on a device ─────────────────────────
+
+/** The app reports its own crashes here so an admin can see them. Too many from one person are dropped. */
+api.post('/api/errors', async (req) => {
+  const me = await authenticate(req);
+  if ((await hit(`errors:${me.id}`, 60 * MINUTES)) > 30) return { ok: true };
+  const b = req.body;
+  await logError('app', { message: str(b.message, 500), stack: str(b.stack, 4000) }, {
+    user: me.username, version: str(b.version, 20), page: str(b.page, 100), device: str(req.headers['user-agent'], 300),
+  });
+  return { ok: true };
+});
+
 // ───────────────────────── Receipt files ─────────────────────────
 // Uploaded separately from sync (photos are big). The id is chosen on the phone, so a retry is harmless.
 
@@ -544,12 +571,6 @@ api.get('/api/files/:id', async (req, res) => {
 
 // ───────────────────────── Backups (admin) ─────────────────────────
 
-let busy = false;
-async function exclusive(fn) {
-  if (busy) throw new HttpError(409, 'A backup or restore is already running');
-  busy = true;
-  try { return await fn(); } finally { busy = false; }
-}
 async function findBackup(id) {
   const { rows } = await query("SELECT * FROM backups WHERE id=$1 AND status='ok'", [Number(id) || 0]);
   if (!rows[0]) throw new HttpError(404, 'Backup not found');
@@ -562,7 +583,7 @@ api.get('/api/backups', async (req) => {
   return {
     config: {
       defaultTargets: defaultTargets(), s3: s3Configured(), localDir: BACKUP_DIR,
-      schedule: backupSchedule(), keep: Number(process.env.BACKUP_KEEP || 30),
+      schedule: backupSchedule(), keep: await getKeep(), maxKeep: MAX_KEEP,
     },
     backups: rows.map((b) => ({
       id: b.id, filename: b.filename, target: b.target, location: b.location,
@@ -570,6 +591,20 @@ api.get('/api/backups', async (req) => {
       createdBy: b.created_by, createdAt: b.created_at,
     })),
   };
+});
+
+/** Change how many backups are kept in each place. Older ones are deleted straight away. */
+api.put('/api/backups/settings', async (req) => {
+  const me = await authenticateAdmin(req);
+  const keep = Number(req.body.keep);
+  if (!Number.isInteger(keep) || keep < 1 || keep > MAX_KEEP) throw new HttpError(400, `Keep between 1 and ${MAX_KEEP} backups`);
+  return exclusive(async () => {
+    const before = await getKeep();
+    await setKeep(keep);
+    const removed = await pruneBackups();
+    if (keep !== before || removed) await audit(me, 'backup.settings', { detail: { keep, before, removed }, ip: req.ip });
+    return { keep, removed };
+  });
 });
 
 api.post('/api/backups', async (req) => {
@@ -596,13 +631,36 @@ api.get('/api/backups/:id/download', async (req, res) => {
   return undefined; // response already sent
 });
 
+/**
+ * Remove an entry from the history, deleting its file if it has one. The entry goes even when the
+ * file can't be deleted (say the S3 settings have changed since), so the list can always be tidied.
+ */
+api.delete('/api/backups/:id', async (req) => {
+  const me = await authenticateAdmin(req);
+  const { rows } = await query('SELECT * FROM backups WHERE id=$1', [Number(req.params.id) || 0]);
+  const b = rows[0];
+  if (!b) throw new HttpError(404, 'Backup not found');
+  return exclusive(async () => {
+    let fileError = null;
+    if (b.status === 'ok') {
+      try { await deleteBackupFile(b); } catch (e) { fileError = e.message; }
+    }
+    await query('DELETE FROM backups WHERE id=$1', [b.id]);
+    if (b.status === 'ok') {
+      await audit(me, 'backup.delete', { target: b.filename, detail: { place: b.target, ...(fileError ? { fileError } : {}) }, ip: req.ip });
+    }
+    return { ok: true, fileDeleted: b.status === 'ok' && !fileError, fileError };
+  });
+});
+
 api.post('/api/backups/:id/restore', async (req) => {
   const me = await authenticateAdmin(req);
   if (req.body.confirm !== 'RESTORE') throw new HttpError(400, 'Type RESTORE to confirm');
   const b = await findBackup(req.params.id);
   return exclusive(async () => {
     // Safety net: snapshot the current data first so a restore can itself be undone.
-    const pre = await runBackup({ targets: defaultTargets(), createdBy: `${me.username} (before restore)` });
+    // Nothing is deleted to make room for it: with a low limit that could be the very backup being restored.
+    const pre = await runBackup({ targets: defaultTargets(), createdBy: `${me.username} (before restore)`, prune: false });
     if (!pre.some((r) => r.status === 'ok')) throw new HttpError(500, 'Could not take a safety backup, restore cancelled');
     await restoreBackup(b);
     await audit(me, 'backup.restore', { target: b.filename, ip: req.ip });

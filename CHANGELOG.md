@@ -7,6 +7,40 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-23
+
+### Added
+
+- "Backups to keep" on the Backups screen. An admin sets how many backups are
+  kept in each place (1 to 365); the oldest beyond that are deleted after each
+  backup, and straight away when the number is lowered. `BACKUP_KEEP` is now
+  only the starting value. The change is recorded in the activity log and is
+  not undone by restoring an older backup.
+
+- Claude connector (Settings → Claude connector). The app is now an MCP
+  server at `/mcp` that Claude connects to by an administrator signing in on a
+  web page (OAuth 2.1 with PKCE), with no token to paste. Claude can read the
+  app's status, errors, activity log, backups and list of users, never
+  anyone's journeys, fuel or receipts. It can ask for a backup, a different
+  number of backups to keep, an account to be blocked or unblocked, or an
+  error to be marked resolved; each request waits for an administrator to
+  approve it in the app. It can also leave suggestions and feedback, which
+  are listed in the app for adding to `ROADMAP.md`.
+- An error log, read through the connector: failures on the server, in
+  scheduled backups and email, and crashes in the app on people's devices.
+- Delete on each entry in the backup history. It deletes the backup's file
+  and removes the entry. If the file can't be deleted, for example because
+  the S3 bucket or backup folder has changed since, the entry is still
+  removed and the message says the file was left behind. Failed and
+  "restored" entries can be cleared the same way.
+
+### Fixed
+
+- Backups that had been deleted to make room still showed in the history with
+  Download and Restore buttons that failed. They now leave the list.
+- With a low number of backups to keep, the safety backup taken before a
+  restore could delete the backup being restored.
+
 ## [1.1.0] - 2026-11-12
 
 ### Added
@@ -119,6 +153,7 @@ First tagged release.
   container port `3001`, while the app actually listens on `3000`; the quick
   start now works out of the box (`3000:3000`).
 
-[Unreleased]: https://github.com/christopherdally/mileage-tracker/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/christopherdally/mileage-tracker/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/christopherdally/mileage-tracker/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/christopherdally/mileage-tracker/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/christopherdally/mileage-tracker/releases/tag/v1.0.0

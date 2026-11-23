@@ -185,6 +185,7 @@ export function MoreScreen({ user, onUser, onSignOut, go }) {
             <button type="button" onClick={() => go('users')}><span>Users</span><span className="muted">Add people, reset passwords</span></button>
             <button type="button" onClick={() => go('backups')}><span>Backups</span><span className="muted">Back up and restore the database</span></button>
             <button type="button" onClick={() => go('activity')}><span>Activity log</span><span className="muted">Who changed accounts and backups, and when</span></button>
+            <button type="button" onClick={() => go('connector')}><span>Claude connector</span><span className="muted">Let Claude check for errors and ask for changes</span></button>
           </nav>
         </section>
       )}

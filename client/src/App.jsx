@@ -13,6 +13,7 @@ import { FuelScreen } from './screens/Fuel.jsx';
 import { ReportScreen } from './screens/Report.jsx';
 import { MoreScreen, useSyncStatus } from './screens/More.jsx';
 import { UsersScreen, BackupsScreen, ActivityScreen } from './screens/Admin.jsx';
+import { ConnectorScreen } from './screens/Connector.jsx';
 
 const TABS = [
   { id: 'log', label: 'Log', icon: 'log' },
@@ -22,7 +23,7 @@ const TABS = [
   { id: 'report', label: 'Report', icon: 'report' },
   { id: 'more', label: 'Settings', icon: 'more' },
 ];
-const SUBPAGES = { users: 'more', backups: 'more', activity: 'more', 'report-archive': 'more', 'company-dates': 'more' };
+const SUBPAGES = { users: 'more', backups: 'more', activity: 'more', connector: 'more', 'report-archive': 'more', 'company-dates': 'more' };
 // A password reset link from an email: #reset?token=…
 const resetTokenInUrl = () => (location.hash.startsWith('#reset?') ? new URLSearchParams(location.hash.slice(7)).get('token') : null);
 
@@ -134,6 +135,7 @@ function Shell({ user, setUser, signOut }) {
         {page === 'users' && <UsersScreen me={user} back={() => go('more')} />}
         {page === 'backups' && <BackupsScreen back={() => go('more')} />}
         {page === 'activity' && <ActivityScreen back={() => go('more')} />}
+        {page === 'connector' && <ConnectorScreen back={() => go('more')} />}
       </main>
       <nav className="tabbar" aria-label="Main">
         {TABS.map((t) => (

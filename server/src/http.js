@@ -20,7 +20,17 @@ const SECURITY_HEADERS = {
     "base-uri 'self'; form-action 'self'",
 };
 
-export function sendJson(res, status, body) {
+/** A server-rendered page. `formAction` adds origins a form on it may end up at (an OAuth redirect). */
+export function sendHtml(res, status, html, { formAction = '' } = {}) {
+  const csp = SECURITY_HEADERS['Content-Security-Policy'].replace("form-action 'self'", `form-action 'self' ${formAction}`.trim());
+  res.writeHead(status, {
+    ...SECURITY_HEADERS, 'Content-Security-Policy': csp,
+    'Content-Type': 'text/html; charset=utf-8', 'Content-Length': Buffer.byteLength(html), 'Cache-Control': 'no-store',
+  });
+  res.end(html);
+}
+
+export function sendJson(res, status, body, extraHeaders = {}) {
   const data = JSON.stringify(body);
   res.writeHead(status, {
     ...SECURITY_HEADERS,
@@ -28,6 +38,7 @@ export function sendJson(res, status, body) {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(data),
     'Cache-Control': 'no-store',
+    ...extraHeaders,
   });
   res.end(data);
 }

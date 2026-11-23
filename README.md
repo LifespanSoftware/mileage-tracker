@@ -1,6 +1,6 @@
 # Mileage Tracker
 
-[![Version](https://img.shields.io/badge/version-1.1.0-blue)](CHANGELOG.md) [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Version](https://img.shields.io/badge/version-1.2.0-blue)](CHANGELOG.md) [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 A self-hosted, mobile-first app for logging business mileage and producing monthly claim PDFs.
 
@@ -14,6 +14,7 @@ A self-hosted, mobile-first app for logging business mileage and producing month
 - **Spreadsheet export and import.** Download the journeys and fuel behind any report as CSV files for a spreadsheet or accounting software, and import journeys from a CSV file if you kept them in a spreadsheet before.
 - **No sign-up.** Sign in with an email address (or a plain username). Admins create accounts, reset passwords, disable or delete users. Anyone given a password by someone else must choose their own at first sign-in.
 - **Account security.** Optional two-step sign-in with any authenticator app (plus one-off recovery codes), "forgot my password" by email when you configure SMTP, sign-in attempt limits that survive restarts, and an activity log for admins of account and backup changes.
+- **Claude connector.** Add the app to Claude as a custom connector by signing in on a web page (no token to paste). Claude can then check the app's status and errors, suggest improvements, and ask for changes that an admin approves in the app before anything happens.
 - **Backups** with `pg_dump` to the server, to S3 (or any S3-compatible storage), or both. Daily schedule, manual backups, download and one-click restore from the admin screen.
 
 ## Screenshots
@@ -73,13 +74,13 @@ All settings are read from `.env` (see `.env.example` for the full list with def
 | `SESSION_DAYS` | no | `60` | How long a sign-in lasts |
 | `APP_PORT` | no | `3000` | Host port the app is published on (Docker Compose) |
 | `TRUST_PROXY` | no | `false` | Set `true` behind a reverse proxy (Caddy, nginx, Traefik, Dokploy). Sign-in limits and the activity log use the visitor's address, so this must be right |
-| `APP_URL` | for password reset emails | — | Public address of the app, e.g. `https://mileage.example.com`. Used for the link in reset emails |
+| `APP_URL` | for password reset emails; recommended for the Claude connector | — | Public address of the app, e.g. `https://mileage.example.com`. Used for the link in reset emails and for the addresses the Claude connector gives out |
 | `SMTP_HOST`, `SMTP_PORT`, `SMTP_SECURE`, `SMTP_USER`, `SMTP_PASS`, `SMTP_FROM` | for password reset emails | port `587` | Mail server for "Forgot your password?". Leave `SMTP_HOST` empty to keep that feature off |
 | `TZ` | no | `Europe/London` | Timezone for backup scheduling and timestamps |
 | `DOMAIN` | HTTPS profile only | — | Public domain for the Caddy HTTPS profile |
 | `BACKUP_TARGET` | no | `local` | `local`, `s3` or `both` |
 | `BACKUP_TIME` | no | `02:00` | Daily backup time, or `off` |
-| `BACKUP_KEEP` | no | `30` | Backups kept per location |
+| `BACKUP_KEEP` | no | `30` | Backups kept per location, until an admin sets the number in Settings → Backups |
 | `S3_BUCKET`, `S3_PREFIX`, `S3_REGION`, `S3_ENDPOINT`, `S3_FORCE_PATH_STYLE`, `S3_SSE`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | only if using S3 | — | S3 (or S3-compatible) backup storage |
 
 \* `docker-compose.yml` builds `DATABASE_URL` for you from `POSTGRES_PASSWORD`; it only needs setting by hand when running the server outside Docker (see [Development](#development)).
@@ -125,11 +126,15 @@ Configure in `.env`:
 | --- | --- |
 | `BACKUP_TARGET` | `local`, `s3` or `both` |
 | `BACKUP_TIME` | Daily time, e.g. `02:00` (uses `TZ`). `off` to disable. |
-| `BACKUP_KEEP` | Number of backups kept in each place (oldest removed) |
+| `BACKUP_KEEP` | Number of backups kept in each place (oldest deleted). Only the starting value: once an admin sets "Backups to keep" in the app, that number is used instead |
 | `S3_BUCKET`, `S3_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY` | S3 settings |
 | `S3_ENDPOINT`, `S3_FORCE_PATH_STYLE` | For Backblaze B2, Wasabi, Cloudflare R2, MinIO and others |
 
 Local backups live in the `backups` Docker volume. From **Settings → Backups** an admin can back up now, download any backup, or restore one (type `RESTORE` to confirm; a safety backup of the current data is taken first).
+
+**Backups to keep** on that screen sets how many are kept in each place (1 to 365). When there are more, the oldest are deleted: after every backup, and straight away when you lower the number. Deleted backups can't be brought back, and they leave the history list.
+
+**Delete** on a history entry deletes that backup's file and removes the entry. If the file can't be deleted (for example the S3 bucket or backup folder has changed since it was made), the entry is still removed and you're told the file was left where it was.
 
 Restore from the command line instead:
 
@@ -140,6 +145,22 @@ docker compose exec db psql -U mileage -c "UPDATE meta SET value = gen_random_uu
 ```
 
 The last line tells devices to re-download.
+
+## Claude connector
+
+The app has a built-in connector (an MCP server) so that Claude can help look after it.
+
+**Connecting.** In the app go to Settings → Claude connector and copy the address shown (your site's address followed by `/mcp`). In Claude, add a custom connector with that address. Claude opens a Mileage Tracker sign-in page; sign in as an administrator (with your two-step code if you use one) and it's connected. There is no token to create or paste. The site must be on HTTPS, and `APP_URL` should be set to its public address (or `TRUST_PROXY=true` behind a proxy) so the addresses the connector gives out are right.
+
+**What Claude can see.** The app's status, the error log, the activity log, backups and the list of users. It never sees anyone's journeys, fuel or receipts.
+
+**Errors.** The app now keeps an error log for this: failures on the server, in background jobs (scheduled backups, email) and crashes in the app on people's phones. Repeats are counted on one entry and entries are kept for 90 days.
+
+**Changes need your approval.** With "Let Claude suggest and request changes" switched on, Claude can ask for a backup to be run, the number of backups to keep to be changed, an account to be blocked from or allowed to sign in, or an error to be marked resolved. A request does nothing by itself: it waits under "Waiting for you" on that screen with what will happen and why, until an administrator approves or rejects it. Everything is recorded in the activity log.
+
+**Suggestions for the roadmap.** Claude can also leave improvement ideas, feedback and bug reports. They are listed on the same screen. The app can't write to the GitHub repository itself, so they get into `ROADMAP.md` when Claude is working in the repository with the connector attached: it reads the new suggestions, adds them to the roadmap and marks each one as added. You can also mark or dismiss them yourself.
+
+**Disconnecting.** Settings → Claude connector lists what is connected, by whom and when it was last used; Disconnect cuts it off at once. A connection also stops working if the administrator who made it is blocked or stops being an administrator. Restoring a backup disconnects Claude and puts requests and suggestions back to how they were at the time of the backup.
 
 ## Admin tasks
 
@@ -178,7 +199,7 @@ cd client && npm test          # unit tests: claim maths, periods, receipt text,
 cd server && TEST_DATABASE_URL=postgresql://user:pass@localhost:5432/postgres npm test
 
 # Browser test of the built app (sign-in, vehicles, journeys, receipt scan, exports, second device,
-# two-step sign-in, password reset by email, activity log).
+# two-step sign-in, password reset by email, backups, activity log, Claude connector).
 cd client && npm run build
 cd ../e2e && npm install && npx playwright install chromium
 TEST_DATABASE_URL=postgresql://user:pass@localhost:5432/postgres npm test
@@ -194,6 +215,9 @@ server/            Node API (built-in http, scrypt passwords, signed tokens; dep
   src/totp.js      Authenticator-app codes for two-step sign-in
   src/ratelimit.js Attempt limits, counted in the database
   src/audit.js     Activity log
+  src/errors.js    Error log
+  src/connector.js Claude connector: sign-in page (OAuth), MCP tools, admin endpoints
+  src/changes.js   The changes Claude can ask for, applied when an admin approves
   src/mail.js      SMTP for password reset emails
   src/backup.js    pg_dump / pg_restore, local + S3, daily schedule
   src/schema.sql   Tables; applied automatically at start
@@ -226,15 +250,21 @@ DOKPLOY.md         Dokploy deployment guide
 | GET / POST | `/api/users` | admin |
 | PATCH / DELETE | `/api/users/:id` | admin |
 | GET / POST | `/api/backups` | admin |
+| PUT | `/api/backups/settings` | admin |
 | GET | `/api/backups/:id/download` | admin |
+| DELETE | `/api/backups/:id` | admin |
 | POST | `/api/backups/:id/restore` | admin |
 | GET | `/api/audit` | admin |
+| POST | `/api/errors` | signed in (the app reporting its own crashes) |
+| GET | `/api/connector`, plus settings, requests, suggestions and connections under it | admin |
+| POST | `/mcp` | Claude, after an admin has signed in on the connector's page |
+| GET / POST | `/oauth/authorize`, `/oauth/token`, `/oauth/register`, `/.well-known/oauth-*` | the connector's sign-in (OAuth 2.1 with PKCE) |
 
 There is intentionally no sign-up endpoint.
 
 ## Troubleshooting
 
-- **Which version am I running?** It's shown at the bottom of Settings in the app, and `GET /api/health` returns `{"ok":true,"version":"1.1.0"}`. Useful when reporting an issue.
+- **Which version am I running?** It's shown at the bottom of Settings in the app, and `GET /api/health` returns `{"ok":true,"version":"1.2.0"}`. Useful when reporting an issue.
 - **Can't sign in / don't know the admin password:** see [Admin tasks](#admin-tasks) above to reset it from the command line.
 - **Site won't load after `docker compose up`:** check `docker compose logs app` and `docker compose logs db`. The app waits for Postgres to report healthy before starting.
 - **Phone won't install the app or work offline:** this needs HTTPS — see [HTTPS (needed on phones)](#https-needed-on-phones). Plain HTTP only works for browser testing.

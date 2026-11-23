@@ -1,9 +1,10 @@
 // Drives the real app in a browser: sign in, vehicles, journeys, receipt scan, report exports, CSV import, second device,
-// two-step sign-in, password reset by email and the activity log.
+// two-step sign-in, password reset by email, backups, the activity log and the Claude connector.
 // Needs a server on an EMPTY database with ADMIN_PASSWORD, APP_URL, SMTP_HOST=127.0.0.1 and SMTP_PORT set
 // and ADMIN_USERNAME unset (run.mjs does this):
 //   BASE=http://localhost:3000 ADMIN_PASSWORD=... SMTP_PORT=... node e2e/app.test.mjs
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import { createRequire } from 'node:module';
 import { startSmtpSink } from '../server/test/smtp-sink.mjs';
@@ -42,6 +43,14 @@ async function signIn(page, password) {
   await page.getByLabel('Email or username').fill('admin@example.com');
   await page.getByLabel('Password').fill(password);
   await page.getByRole('button', { name: 'Sign in' }).click();
+}
+/** Wait until a locator matches exactly n elements. */
+async function assertCount(locator, n) {
+  const deadline = Date.now() + 15000;
+  while ((await locator.count()) !== n) {
+    if (Date.now() > deadline) assert.fail(`expected ${n} matches, found ${await locator.count()}`);
+    await new Promise((r) => setTimeout(r, 100));
+  }
 }
 const tab = (page, name) => page.getByRole('navigation', { name: 'Main' }).getByRole('link', { name }).click();
 const synced = async (page) => {
@@ -286,6 +295,31 @@ try {
   await laptop.getByText('Your session ended').waitFor();
   step('password reset by email, then sign-in with a recovery code');
 
+  // ── Backups: keep only so many ──
+  await tab(tablet, 'Settings');
+  await tablet.getByRole('button', { name: 'Backups Back up and restore' }).click();
+  const downloads = tablet.locator('.backups').getByRole('button', { name: 'Download' });
+  for (const n of [1, 2, 3]) {
+    await tablet.getByRole('button', { name: 'Back up now' }).click();
+    await assertCount(downloads, n);
+  }
+  assert.equal(await tablet.getByLabel('Backups to keep').inputValue(), '30');
+  await tablet.getByLabel('Backups to keep').fill('0');
+  await tablet.getByText('Enter a whole number from 1 to 365').waitFor();
+  await tablet.getByLabel('Backups to keep').fill('2');
+  tablet.once('dialog', (d) => { assert.match(d.message(), /Keep only the newest 2\?/); d.accept(); });
+  await tablet.getByRole('button', { name: 'Save' }).click();
+  await tablet.getByText('Saved. 1 older backup deleted.').waitFor();
+  await assertCount(downloads, 2);
+  await tablet.getByRole('button', { name: 'Back up now' }).click();
+  await tablet.getByText('Backup complete').last().waitFor();
+  await assertCount(downloads, 2);
+  tablet.once('dialog', (d) => { assert.match(d.message(), /The file is deleted too/); d.accept(); });
+  await tablet.locator('.backups li').first().getByRole('button', { name: 'Delete' }).click();
+  await tablet.getByText('Backup deleted').waitFor();
+  await assertCount(downloads, 1);
+  step('backups beyond the number to keep are deleted, and one can be deleted by hand');
+
   // ── Activity log ──
   await tab(tablet, 'Settings');
   await tablet.getByRole('button', { name: 'Activity log' }).click();
@@ -293,7 +327,95 @@ try {
   await log.filter({ hasText: 'admin@example.com signed in with a recovery code' }).waitFor();
   await log.filter({ hasText: 'admin@example.com set a new password from a reset email' }).waitFor();
   await log.filter({ hasText: 'admin@example.com turned on two-step sign-in' }).waitFor();
-  step('activity log shows the security changes');
+  await log.filter({ hasText: 'Set backups to keep to 2 (was 30), deleting 1 older backup' }).waitFor();
+  step('activity log shows the security and backup changes');
+
+  // ── Claude connector: sign in on a web page, read errors, ask for a change, admin approves ──
+  await tablet.locator('.back').click();
+  await tablet.getByRole('button', { name: 'Claude connector' }).click();
+  const mcpUrl = (await tablet.getByTestId('connector-url').textContent()).trim();
+  assert.equal(mcpUrl, `${BASE}/mcp`);
+  await tablet.getByLabel('Let Claude suggest and request changes').click();
+  await tablet.locator('input[type=checkbox]:checked').waitFor();
+  await tablet.getByText("Claude isn't connected.").waitFor();
+
+  // What Claude does when the connector is added: register, then send the admin to the sign-in page.
+  const post = async (path, body, token) => {
+    const r = await fetch(BASE + path, { method: 'POST', headers: { 'content-type': 'application/json', ...(token ? { authorization: `Bearer ${token}` } : {}) }, body: JSON.stringify(body) });
+    return r.json();
+  };
+  const redirectUri = `${BASE}/connected`;
+  const client = await post('/oauth/register', { client_name: 'Claude (browser test)', redirect_uris: [redirectUri] });
+  const verifier = crypto.randomBytes(32).toString('base64url');
+  const consent = await newDevice();
+  await consent.goto(`${BASE}/oauth/authorize?` + new URLSearchParams({
+    response_type: 'code', client_id: client.client_id, redirect_uri: redirectUri, state: 'abc',
+    code_challenge: crypto.createHash('sha256').update(verifier).digest('base64url'), code_challenge_method: 'S256',
+  }));
+  await consent.getByText('Claude (browser test)').waitFor();
+  await consent.getByLabel('Email or username').fill('admin@example.com');
+  await consent.getByLabel('Password').fill('not-the-password');
+  await consent.getByRole('button', { name: 'Sign in and connect' }).click();
+  await consent.getByText('Wrong username or password').waitFor();
+  await consent.getByLabel('Password').fill(NEW_PW);
+  await consent.getByRole('button', { name: 'Sign in and connect' }).click();
+  await consent.getByLabel('Code from your authenticator app').fill(recovery[1]);
+  await consent.getByLabel('Password').fill(NEW_PW);
+  await consent.getByRole('button', { name: 'Sign in and connect' }).click();
+  await consent.waitForURL((u) => u.href.startsWith(redirectUri) && u.searchParams.has('code'));
+  const returned = new URL(consent.url());
+  assert.equal(returned.searchParams.get('state'), 'abc');
+  const tokens = await (await fetch(`${BASE}/oauth/token`, {
+    method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({ grant_type: 'authorization_code', code: returned.searchParams.get('code'), code_verifier: verifier, client_id: client.client_id, redirect_uri: redirectUri }),
+  })).json();
+  let rpcId = 0;
+  const claude = async (name, args = {}) => {
+    const r = await post('/mcp', { jsonrpc: '2.0', id: ++rpcId, method: 'tools/call', params: { name, arguments: args } }, tokens.access_token);
+    assert.equal(r.result.isError, undefined, r.result.content[0].text);
+    return JSON.parse(r.result.content[0].text);
+  };
+  assert.equal((await claude('app_status')).unresolvedErrors, 0);
+
+  // A crash in the app on someone's device shows up for Claude.
+  const crashing = await tablet.context().newPage();
+  await crashing.goto(BASE);
+  await crashing.getByRole('navigation', { name: 'Main' }).waitFor();
+  await crashing.evaluate(() => { setTimeout(() => { throw new Error('Browser test crash'); }, 0); });
+  let errors = [];
+  for (let i = 0; i < 50 && !errors.length; i++) {
+    await new Promise((r) => setTimeout(r, 200));
+    errors = (await claude('recent_errors')).errors;
+  }
+  await crashing.close();
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /Browser test crash/);
+  assert.equal(errors[0].source, 'app');
+  assert.equal((await claude('error_details', { id: errors[0].id })).context.user, 'admin@example.com');
+
+  await claude('suggest_improvement', { title: 'Show errors to admins in the app', detail: 'Admins can only see errors through the connector.' });
+  const asked = await claude('request_backup', { reason: 'Before looking into the crash' });
+  assert.equal(asked.request.status, 'pending');
+
+  // The admin sees the connection, the suggestion and the request, and approves it.
+  await tablet.locator('.back').click();
+  await tablet.getByRole('button', { name: 'Claude connector' }).click();
+  await tablet.getByText('Connected by admin@example.com on').waitFor();
+  await tablet.getByText('Show errors to admins in the app').waitFor();
+  const waiting = tablet.locator('.activity li').filter({ hasText: 'Run a backup now' });
+  await waiting.getByText('Why: Before looking into the crash').waitFor();
+  await waiting.getByRole('button', { name: 'Approve' }).click();
+  await tablet.getByText('Done. Backup made').waitFor();
+  await tablet.getByText('Nothing is waiting for approval.').waitFor();
+  assert.equal((await claude('list_change_requests')).requests[0].status, 'applied');
+
+  // Disconnecting cuts Claude off.
+  tablet.once('dialog', (d) => d.accept());
+  await tablet.getByRole('button', { name: 'Disconnect' }).click();
+  await tablet.getByText("Claude isn't connected.").waitFor();
+  const cut = await fetch(`${BASE}/mcp`, { method: 'POST', headers: { 'content-type': 'application/json', authorization: `Bearer ${tokens.access_token}` }, body: '{"jsonrpc":"2.0","id":1,"method":"ping"}' });
+  assert.equal(cut.status, 401);
+  step('Claude connector: web sign-in, errors, an approved change, disconnect');
 
   assert.deepEqual(problems, [], 'no browser errors, blocked requests or requests to other origins');
   console.log('\nALL PASSED');

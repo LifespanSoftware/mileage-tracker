@@ -105,13 +105,32 @@ async function pruneS3(keep) {
   return old.length;
 }
 
-/** Delete backups beyond the number to keep, in every place that is in use. Returns how many went. */
+/**
+ * The history can list backups the folder or bucket no longer shows: made under an earlier S3 bucket or
+ * prefix, or deleted outside the app. Entries beyond the newest `keep` go too, with their file wherever
+ * the entry says it was stored. If that file can't be reached the entry still goes.
+ */
+async function pruneHistory(target, keep) {
+  const { rows } = await query(
+    "SELECT * FROM backups WHERE target=$1 AND status='ok' ORDER BY created_at DESC, id DESC OFFSET $2", [target, keep]);
+  for (const b of rows) {
+    await deleteBackupFile(b).catch(() => {});
+    await query('DELETE FROM backups WHERE id=$1', [b.id]);
+  }
+  return rows.length;
+}
+
+async function pruneTarget(target, keep) {
+  let removed = 0;
+  if (target === 'local' && fs.existsSync(BACKUP_DIR)) removed += await pruneLocal(keep);
+  if (target === 's3' && s3Configured()) removed += await pruneS3(keep);
+  return removed + await pruneHistory(target, keep);
+}
+
+/** Delete backups beyond the number to keep, in each place. Returns how many went. */
 export async function pruneBackups() {
   const keep = await getKeep();
-  let removed = 0;
-  if (fs.existsSync(BACKUP_DIR)) removed += await pruneLocal(keep);
-  if (s3Configured()) removed += await pruneS3(keep);
-  return removed;
+  return (await pruneTarget('local', keep)) + (await pruneTarget('s3', keep));
 }
 
 /** Dump the whole database (pg_dump custom format, compressed) and store it in each target. */
@@ -142,7 +161,6 @@ export async function runBackup({ targets = defaultTargets(), createdBy = 'sched
         await fsp.mkdir(BACKUP_DIR, { recursive: true });
         row.location = path.join(BACKUP_DIR, filename);
         await fsp.copyFile(tmp, row.location, fs.constants.COPYFILE_EXCL);
-        if (prune) await pruneLocal(keep);
       } else if (target === 's3') {
         if (!s3Configured()) throw new Error('S3_BUCKET is not set');
         const { m, c } = await s3();
@@ -152,7 +170,6 @@ export async function runBackup({ targets = defaultTargets(), createdBy = 'sched
           ContentType: 'application/octet-stream', ServerSideEncryption: env.S3_SSE || undefined,
         }));
         row.location = `s3://${env.S3_BUCKET}/${Key}`;
-        if (prune) await pruneS3(keep);
       } else {
         throw new Error(`Unknown backup target "${target}"`);
       }
@@ -163,6 +180,11 @@ export async function runBackup({ targets = defaultTargets(), createdBy = 'sched
     }
     await record(row);
     results.push(row);
+    // After recording, so the new backup counts towards the number kept. A clean-up that fails
+    // is noted but doesn't make a backup that was stored look failed.
+    if (prune && row.status === 'ok') {
+      await pruneTarget(target, keep).catch((e) => logError('job', e, { job: 'deleting old backups', place: target }));
+    }
   }
   await fsp.unlink(tmp).catch(() => {});
   return results;

@@ -132,7 +132,7 @@ Configure in `.env`:
 
 Local backups live in the `backups` Docker volume. From **Settings → Backups** an admin can back up now, download any backup, or restore one (type `RESTORE` to confirm; a safety backup of the current data is taken first).
 
-**Backups to keep** on that screen sets how many are kept in each place (1 to 365). When there are more, the oldest are deleted: after every backup, and straight away when you lower the number. Deleted backups can't be brought back, and they leave the history list.
+**Backups to keep** on that screen sets how many are kept in each place (1 to 365). When there are more, the oldest are deleted: after every backup, and straight away when you lower the number. Deleted backups can't be brought back, and they leave the history list. The number applies to the history as well as to the files found in the folder or bucket, so backups made under an earlier S3 bucket or prefix are counted and deleted too.
 
 **Delete** on a history entry deletes that backup's file and removes the entry. If the file can't be deleted (for example the S3 bucket or backup folder has changed since it was made), the entry is still removed and you're told the file was left where it was.
 

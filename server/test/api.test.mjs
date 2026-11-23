@@ -102,10 +102,15 @@ for (const bad of [0, 2.5, 'lots', 366]) ok((await call('PUT', '/api/backups/set
 for (let i = 0; i < 3; i++) await call('POST', '/api/backups', {}, admin);
 const okBackups = async () => (await call('GET', '/api/backups', null, admin)).j.backups.filter((b) => b.status === 'ok');
 ok((await okBackups()).length === 4, 'four backups before the limit is lowered');
+// One file disappears behind the app's back (as when the S3 location changes): its entry is still counted.
+const stale = (await okBackups())[2];
+fs.unlinkSync(path.join(list.j.config.localDir, stale.filename));
 r = await call('PUT', '/api/backups/settings', { keep: 2 }, admin);
-ok(r.s === 200 && r.j.keep === 2 && r.j.removed === 2, 'lowering the number deletes the oldest straight away');
+ok(r.s === 200 && r.j.keep === 2 && r.j.removed === 2, 'lowering the number deletes the oldest straight away, including an entry whose file had gone');
 let kept = await okBackups();
-ok(kept.length === 2 && !kept.some((b) => b.id === good.id), 'deleted backups leave the history; the newest stay');
+ok(kept.length === 2 && !kept.some((b) => b.id === good.id || b.id === stale.id), 'deleted backups leave the history; the newest stay');
+ok(fs.readdirSync(list.j.config.localDir).filter((f) => f.endsWith('.dump')).length === 2, 'and only their files are left on disk');
+ok((await call('PUT', '/api/backups/settings', { keep: 2 }, admin)).j.removed === 0, 'saving the same number again finds nothing more to delete');
 ok((await fetch(B + `/api/backups/${good.id}/download`, { headers: { authorization: 'Bearer ' + admin } })).status === 404, 'a deleted backup can no longer be downloaded');
 await call('POST', '/api/backups', {}, admin);
 kept = await okBackups();

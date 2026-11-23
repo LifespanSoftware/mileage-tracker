@@ -36,6 +36,12 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 
+- "Backups to keep" now also applies to the backup history. Entries beyond
+  the newest ones are deleted with their files wherever they were stored, so
+  backups made under an earlier S3 bucket or prefix, and entries whose file
+  had already gone, no longer pile up. This happens after the next backup.
+- A failed clean-up of old backups no longer marks the new backup as failed;
+  it is recorded in the error log instead.
 - Backups that had been deleted to make room still showed in the history with
   Download and Restore buttons that failed. They now leave the list.
 - With a low number of backups to keep, the safety backup taken before a

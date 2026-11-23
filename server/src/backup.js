@@ -175,6 +175,23 @@ export async function fetchBackupFile(b) {
   return { path: tmp, temp: true };
 }
 
+/**
+ * Delete a backup's file, wherever its history entry says it was stored. Throws if it can't be
+ * deleted (e.g. the S3 bucket has since changed); a file that is already gone counts as deleted.
+ */
+export async function deleteBackupFile(b) {
+  if (b.target === 'local') {
+    const p = path.resolve(b.location);
+    if (!p.startsWith(BACKUP_DIR + path.sep)) throw new Error('The file is outside the current backup folder');
+    await fsp.unlink(p).catch((e) => { if (e.code !== 'ENOENT') throw e; });
+    return;
+  }
+  const match = /^s3:\/\/([^/]+)\/(.+)$/.exec(b.location);
+  if (!match) throw new Error('Bad S3 location');
+  const { m, c } = await s3();
+  await c.send(new m.DeleteObjectCommand({ Bucket: match[1], Key: match[2] }));
+}
+
 /** Replace the database contents with a backup, then tell devices to re-download. */
 export async function restoreBackup(b) {
   const file = await fetchBackupFile(b);

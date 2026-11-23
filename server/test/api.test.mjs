@@ -1,5 +1,8 @@
 // End-to-end API test. Start the server against an EMPTY database with ADMIN_PASSWORD=adminpass123, then:
 //   BASE=http://localhost:3000 node server/test/api.test.mjs
+import fs from 'node:fs';
+import path from 'node:path';
+
 const B = process.env.BASE || 'http://localhost:3000';
 let fails = 0;
 const ok = (c, m) => { console.log((c ? 'PASS ' : 'FAIL ') + m); if (!c) fails++; };
@@ -109,10 +112,27 @@ kept = await okBackups();
 ok(kept.length === 2 && (await call('GET', '/api/backups', null, admin)).j.config.keep === 2, 'each new backup pushes out the oldest');
 const restoreFrom = kept[0];
 
+// Delete entries from the history
+const all = (await call('GET', '/api/backups', null, admin)).j.backups;
+const failedRow = all.find((b) => b.status === 'failed');
+ok((await call('DELETE', '/api/backups/' + kept[1].id, null, dave3)).s === 403, 'only admins delete backups');
+ok((await call('DELETE', '/api/backups/999999', null, admin)).s === 404, 'unknown backup');
+r = await call('DELETE', '/api/backups/' + kept[1].id, null, admin);
+ok(r.s === 200 && r.j.fileDeleted === true && !fs.existsSync(path.join(list.j.config.localDir, kept[1].filename)), 'deleting a backup removes its file');
+r = await call('DELETE', '/api/backups/' + failedRow.id, null, admin);
+ok(r.s === 200 && r.j.fileDeleted === false && !r.j.fileError, 'a failed entry (no file) can be cleared');
+await call('POST', '/api/backups', {}, admin);
+const gone = (await okBackups())[0];
+fs.unlinkSync(path.join(list.j.config.localDir, gone.filename));
+r = await call('DELETE', '/api/backups/' + gone.id, null, admin);
+ok(r.s === 200 && !r.j.fileError, 'an entry whose file is already gone can be deleted');
+const left = (await call('GET', '/api/backups', null, admin)).j.backups.map((b) => b.id);
+ok(![kept[1].id, failedRow.id, gone.id].some((id) => left.includes(id)) && left.includes(restoreFrom.id), 'deleted entries leave the history; others stay');
+
 // Change data, then restore
 await call('POST', '/api/sync', { epoch, cursor: 0, trips: [{ id: uuid(), tripDate: '2026-10-10', miles: 5, description: 'after backup', updatedAt: new Date().toISOString() }] }, dave3);
 ok((await call('POST', `/api/backups/${restoreFrom.id}/restore`, { confirm: 'nope' }, admin)).s === 400, 'restore needs typed confirmation');
-ok((await call('PUT', '/api/backups/settings', { keep: 1 }, admin)).j.removed === 1, 'keeping one leaves only the newest');
+ok((await call('PUT', '/api/backups/settings', { keep: 1 }, admin)).j.keep === 1, 'keeping one leaves only the newest');
 r = await call('POST', `/api/backups/${restoreFrom.id}/restore`, { confirm: 'RESTORE' }, admin);
 ok(r.s === 200, 'restore succeeded ' + JSON.stringify(r.j));
 const dave4 = (await call('POST', '/api/auth/login', { username: 'dave', password: 'resetpass9' })).j.token;

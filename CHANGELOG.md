@@ -17,6 +17,12 @@ and this project follows [Semantic Versioning](https://semver.org/).
   only the starting value. The change is recorded in the activity log and is
   not undone by restoring an older backup.
 
+- Delete on each entry in the backup history. It deletes the backup's file
+  and removes the entry. If the file can't be deleted, for example because
+  the S3 bucket or backup folder has changed since, the entry is still
+  removed and the message says the file was left behind. Failed and
+  "restored" entries can be cleared the same way.
+
 ### Fixed
 
 - Backups that had been deleted to make room still showed in the history with

@@ -133,6 +133,8 @@ Local backups live in the `backups` Docker volume. From **Settings → Backups**
 
 **Backups to keep** on that screen sets how many are kept in each place (1 to 365). When there are more, the oldest are deleted: after every backup, and straight away when you lower the number. Deleted backups can't be brought back, and they leave the history list.
 
+**Delete** on a history entry deletes that backup's file and removes the entry. If the file can't be deleted (for example the S3 bucket or backup folder has changed since it was made), the entry is still removed and you're told the file was left where it was.
+
 Restore from the command line instead:
 
 ```bash
@@ -230,6 +232,7 @@ DOKPLOY.md         Dokploy deployment guide
 | GET / POST | `/api/backups` | admin |
 | PUT | `/api/backups/settings` | admin |
 | GET | `/api/backups/:id/download` | admin |
+| DELETE | `/api/backups/:id` | admin |
 | POST | `/api/backups/:id/restore` | admin |
 | GET | `/api/audit` | admin |
 

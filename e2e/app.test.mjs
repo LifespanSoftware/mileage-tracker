@@ -313,7 +313,11 @@ try {
   await tablet.getByRole('button', { name: 'Back up now' }).click();
   await tablet.getByText('Backup complete').last().waitFor();
   await assertCount(downloads, 2);
-  step('backups beyond the number to keep are deleted');
+  tablet.once('dialog', (d) => { assert.match(d.message(), /The file is deleted too/); d.accept(); });
+  await tablet.locator('.backups li').first().getByRole('button', { name: 'Delete' }).click();
+  await tablet.getByText('Backup deleted').waitFor();
+  await assertCount(downloads, 1);
+  step('backups beyond the number to keep are deleted, and one can be deleted by hand');
 
   // ── Activity log ──
   await tab(tablet, 'Settings');

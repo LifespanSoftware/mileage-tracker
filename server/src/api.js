@@ -13,7 +13,7 @@ import {
 } from './auth.js';
 import {
   runBackup, restoreBackup, fetchBackupFile, defaultTargets, s3Configured, BACKUP_DIR, backupSchedule,
-  getKeep, setKeep, pruneBackups, MAX_KEEP,
+  getKeep, setKeep, pruneBackups, MAX_KEEP, deleteBackupFile,
 } from './backup.js';
 
 export const api = createRouter();
@@ -609,6 +609,28 @@ api.get('/api/backups/:id/download', async (req, res) => {
     if (file.temp) await fsp.unlink(file.path).catch(() => {});
   }
   return undefined; // response already sent
+});
+
+/**
+ * Remove an entry from the history, deleting its file if it has one. The entry goes even when the
+ * file can't be deleted (say the S3 settings have changed since), so the list can always be tidied.
+ */
+api.delete('/api/backups/:id', async (req) => {
+  const me = await authenticateAdmin(req);
+  const { rows } = await query('SELECT * FROM backups WHERE id=$1', [Number(req.params.id) || 0]);
+  const b = rows[0];
+  if (!b) throw new HttpError(404, 'Backup not found');
+  return exclusive(async () => {
+    let fileError = null;
+    if (b.status === 'ok') {
+      try { await deleteBackupFile(b); } catch (e) { fileError = e.message; }
+    }
+    await query('DELETE FROM backups WHERE id=$1', [b.id]);
+    if (b.status === 'ok') {
+      await audit(me, 'backup.delete', { target: b.filename, detail: { place: b.target, ...(fileError ? { fileError } : {}) }, ip: req.ip });
+    }
+    return { ok: true, fileDeleted: b.status === 'ok' && !fileError, fileError };
+  });
 });
 
 api.post('/api/backups/:id/restore', async (req) => {

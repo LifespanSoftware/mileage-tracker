@@ -176,3 +176,73 @@ CREATE TABLE IF NOT EXISTS rate_limits (
   window_start TIMESTAMPTZ NOT NULL,
   count        INTEGER NOT NULL
 );
+
+-- Errors the app ran into, for an admin (or Claude, through the connector) to look at.
+-- One row per distinct problem; repeats bump the count.
+CREATE TABLE IF NOT EXISTS error_log (
+  id          BIGSERIAL PRIMARY KEY,
+  fingerprint TEXT NOT NULL UNIQUE,
+  source      TEXT NOT NULL,              -- 'server' | 'app' (a person's phone or browser) | 'job' (backups, email, tidy-up)
+  message     TEXT NOT NULL,
+  stack       TEXT NOT NULL DEFAULT '',
+  context     JSONB NOT NULL DEFAULT '{}'::jsonb,   -- from the latest occurrence
+  count       INTEGER NOT NULL DEFAULT 1,
+  first_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_at     TIMESTAMPTZ NOT NULL DEFAULT now(),
+  resolved_at TIMESTAMPTZ
+);
+
+-- Claude connector: sign-in by web page (OAuth 2.1 with PKCE). Only hashes of codes and tokens are stored.
+CREATE TABLE IF NOT EXISTS oauth_clients (
+  id            TEXT PRIMARY KEY,
+  name          TEXT NOT NULL DEFAULT '',
+  redirect_uris JSONB NOT NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS oauth_codes (
+  code_hash      TEXT PRIMARY KEY,
+  client_id      TEXT NOT NULL REFERENCES oauth_clients(id) ON DELETE CASCADE,
+  user_id        UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  redirect_uri   TEXT NOT NULL,
+  code_challenge TEXT NOT NULL,
+  expires_at     TIMESTAMPTZ NOT NULL
+);
+-- One row per connection an admin has approved; refreshing replaces the tokens in place.
+CREATE TABLE IF NOT EXISTS oauth_tokens (
+  id              BIGSERIAL PRIMARY KEY,
+  client_id       TEXT NOT NULL REFERENCES oauth_clients(id) ON DELETE CASCADE,
+  user_id         UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  access_hash     TEXT NOT NULL UNIQUE,
+  access_expires  TIMESTAMPTZ NOT NULL,
+  refresh_hash    TEXT NOT NULL UNIQUE,
+  refresh_expires TIMESTAMPTZ NOT NULL,
+  created_at      TIMESTAMPTZ NOT NULL DEFAULT now(),
+  last_used_at    TIMESTAMPTZ
+);
+
+-- Changes Claude asked for through the connector. Nothing happens until an admin approves one in the app.
+CREATE TABLE IF NOT EXISTS change_requests (
+  id           BIGSERIAL PRIMARY KEY,
+  kind         TEXT NOT NULL,
+  params       JSONB NOT NULL DEFAULT '{}'::jsonb,
+  summary      TEXT NOT NULL,             -- what will happen, written by the server from kind and params
+  reason       TEXT NOT NULL DEFAULT '',  -- why, in Claude's words
+  status       TEXT NOT NULL DEFAULT 'pending',  -- pending | applied | failed | rejected
+  result       TEXT NOT NULL DEFAULT '',
+  requested_by TEXT NOT NULL DEFAULT '',  -- the connection it came through
+  requested_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  decided_by   TEXT NOT NULL DEFAULT '',
+  decided_at   TIMESTAMPTZ
+);
+
+-- Improvements and feedback Claude left through the connector, to be copied into ROADMAP.md in the repository.
+CREATE TABLE IF NOT EXISTS suggestions (
+  id           BIGSERIAL PRIMARY KEY,
+  kind         TEXT NOT NULL DEFAULT 'improvement',  -- improvement | feedback | bug
+  title        TEXT NOT NULL,
+  detail       TEXT NOT NULL DEFAULT '',
+  status       TEXT NOT NULL DEFAULT 'new',          -- new | added (now in ROADMAP.md) | dismissed
+  suggested_by TEXT NOT NULL DEFAULT '',
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);

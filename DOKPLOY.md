@@ -24,8 +24,9 @@ ADMIN_USERNAME=admin@example.com
 ADMIN_PASSWORD=
 TZ=Europe/London
 
-# Optional: "Forgot your password?" emails. Needs your site's address and a mail server.
+# Your site's address. Used by the Claude connector (Settings → Claude connector) and in reset emails.
 # APP_URL=https://mileage.example.com
+# Optional: "Forgot your password?" emails. Needs APP_URL and a mail server.
 # SMTP_HOST=
 # SMTP_PORT=587
 # SMTP_USER=

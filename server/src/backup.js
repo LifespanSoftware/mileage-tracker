@@ -7,9 +7,19 @@ import os from 'node:os';
 import path from 'node:path';
 import { pipeline } from 'node:stream/promises';
 import { query, migrate } from './db.js';
+import { HttpError } from './http.js';
+import { logError } from './errors.js';
 
 const env = process.env;
 export const BACKUP_DIR = path.resolve(env.BACKUP_DIR || '/backups');
+// One backup, restore or clean-up at a time.
+let busy = false;
+export async function exclusive(fn) {
+  if (busy) throw new HttpError(409, 'A backup or restore is already running');
+  busy = true;
+  try { return await fn(); } finally { busy = false; }
+}
+
 export const MAX_KEEP = 365;
 const clampKeep = (n) => Math.min(MAX_KEEP, Math.max(1, Math.floor(Number(n)) || 30));
 
@@ -250,9 +260,13 @@ export function startBackupSchedule() {
     setTimeout(async () => {
       try {
         const results = await runBackup({ createdBy: 'schedule' });
-        for (const r of results) console.log(`Scheduled backup to ${r.target}: ${r.status} ${r.location || ''} ${r.error || ''}`);
+        for (const r of results) {
+          console.log(`Scheduled backup to ${r.target}: ${r.status} ${r.location || ''} ${r.error || ''}`);
+          if (r.status !== 'ok') await logError('job', new Error(`Scheduled backup to ${r.target} failed: ${r.error}`), { job: 'scheduled backup' });
+        }
       } catch (e) {
         console.error('Scheduled backup failed:', e);
+        await logError('job', e, { job: 'scheduled backup' });
       }
       scheduleNext();
     }, next - now);

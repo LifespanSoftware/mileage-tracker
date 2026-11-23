@@ -147,6 +147,12 @@ function describe({ action, target, detail }) {
     case 'backup.download': return `Downloaded the backup ${target}`;
     case 'backup.restore': return `Restored the database from ${target}`;
     case 'backup.delete': return `Deleted the backup ${target}${detail?.fileError ? ` from the history; its file could not be deleted (${detail.fileError})` : ''}`;
+    case 'connector.connect': return `Connected ${target} to this app`;
+    case 'connector.disconnect': return `Disconnected ${target}`;
+    case 'connector.settings': return detail?.allowChanges ? 'Let Claude suggest and request changes' : 'Stopped Claude suggesting and requesting changes';
+    case 'change.request': return `Asked for a change: ${target}`;
+    case 'change.approve': return `Approved a change Claude asked for: ${target}${detail?.outcome === 'failed' ? ` (it couldn't be done: ${detail.result})` : ''}`;
+    case 'change.reject': return `Rejected a change Claude asked for: ${target}`;
     case 'backup.settings': return `Set backups to keep to ${detail?.keep} (was ${detail?.before})${detail?.removed ? `, deleting ${detail.removed} older ${detail.removed === 1 ? 'backup' : 'backups'}` : ''}`;
     case 'auth.password_change': return `${target} changed their password`;
     case 'auth.password_reset_request': return `A password reset email was sent to ${target}`;

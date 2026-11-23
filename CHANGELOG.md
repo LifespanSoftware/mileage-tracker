@@ -17,6 +17,17 @@ and this project follows [Semantic Versioning](https://semver.org/).
   only the starting value. The change is recorded in the activity log and is
   not undone by restoring an older backup.
 
+- Claude connector (Settings → Claude connector). The app is now an MCP
+  server at `/mcp` that Claude connects to by an administrator signing in on a
+  web page (OAuth 2.1 with PKCE), with no token to paste. Claude can read the
+  app's status, errors, activity log, backups and list of users, never
+  anyone's journeys, fuel or receipts. It can ask for a backup, a different
+  number of backups to keep, an account to be blocked or unblocked, or an
+  error to be marked resolved; each request waits for an administrator to
+  approve it in the app. It can also leave suggestions and feedback, which
+  are listed in the app for adding to `ROADMAP.md`.
+- An error log, read through the connector: failures on the server, in
+  scheduled backups and email, and crashes in the app on people's devices.
 - Delete on each entry in the backup history. It deletes the backup's file
   and removes the entry. If the file can't be deleted, for example because
   the S3 bucket or backup folder has changed since, the entry is still

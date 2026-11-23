@@ -7,6 +7,8 @@ import { HttpError, readJson, readRaw, sendJson, serveStatic } from './http.js';
 import { hashPassword } from './auth.js';
 import { api, MAX_FILE_BYTES } from './api.js';
 import { startBackupSchedule } from './backup.js';
+import { handleConnector } from './connector.js';
+import { logError } from './errors.js';
 
 const CLIENT_DIR = path.resolve(process.env.CLIENT_DIR || 'public');
 const TRUST_PROXY = process.env.TRUST_PROXY === 'true';
@@ -47,6 +49,8 @@ async function handle(req, res) {
     return sendJson(res, 200, out ?? { ok: true });
   }
 
+  if (await handleConnector(req, res, url, clientIp(req))) return;
+
   if (req.method !== 'GET' && req.method !== 'HEAD') throw new HttpError(405, 'Method not allowed');
   if (!serveStatic(CLIENT_DIR, req, res, pathname)) throw new HttpError(404, 'Not found');
 }
@@ -58,6 +62,7 @@ const server = http.createServer((req, res) => {
     if (err.status === 413) res.setHeader('Connection', 'close');
     if (err instanceof HttpError) return sendJson(res, err.status, { error: err.message });
     console.error(err);
+    logError('server', err, { method: req.method, path: String(req.url).split('?')[0], version: APP_VERSION });
     sendJson(res, 500, { error: 'Something went wrong on the server' });
   });
 });
@@ -93,13 +98,18 @@ async function main() {
   const tidyReceipts = () => query(`
     DELETE FROM receipt_files r WHERE r.created_at < now() - interval '7 days'
       AND NOT EXISTS (SELECT 1 FROM fuel_purchases f WHERE NOT f.deleted AND f.receipt_ids ? r.id::text)`)
-    .catch((e) => console.error('Receipt tidy-up failed:', e.message));
+    .catch((e) => { console.error('Receipt tidy-up failed:', e.message); logError('job', e, { job: 'receipt tidy-up' }); });
   // Expired reset links, finished rate-limit windows, and activity older than two years.
   const tidySecurity = () => query(`
     WITH a AS (DELETE FROM password_resets WHERE expires_at < now()),
-         b AS (DELETE FROM rate_limits WHERE window_start < now() - interval '1 day')
+         b AS (DELETE FROM rate_limits WHERE window_start < now() - interval '1 day'),
+         c AS (DELETE FROM oauth_codes WHERE expires_at < now()),
+         d AS (DELETE FROM oauth_tokens WHERE refresh_expires < now()),
+         e AS (DELETE FROM oauth_clients cl WHERE cl.created_at < now() - interval '1 day'
+                 AND NOT EXISTS (SELECT 1 FROM oauth_tokens t WHERE t.client_id = cl.id)),
+         f AS (DELETE FROM error_log WHERE last_at < now() - interval '90 days')
     DELETE FROM audit_log WHERE at < now() - interval '2 years'`)
-    .catch((e) => console.error('Security tidy-up failed:', e.message));
+    .catch((e) => { console.error('Security tidy-up failed:', e.message); logError('job', e, { job: 'security tidy-up' }); });
   const tidy = () => { tidyReceipts(); tidySecurity(); };
   tidy();
   setInterval(tidy, 24 * 3600 * 1000);

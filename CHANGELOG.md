@@ -7,6 +7,14 @@ and this project follows [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.2.1] - 2026-11-24
+
+### Added
+
+- `HANDOVER.md`: where the project stands, how to run the tests, known gaps,
+  and what to update when the repository moves to an organisation.
+  `CLAUDE.md` points new Claude sessions at it and at `ai_rules.md`.
+
 ## [1.2.0] - 2026-11-23
 
 ### Added
@@ -159,7 +167,8 @@ First tagged release.
   container port `3001`, while the app actually listens on `3000`; the quick
   start now works out of the box (`3000:3000`).
 
-[Unreleased]: https://github.com/christopherdally/mileage-tracker/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/christopherdally/mileage-tracker/compare/v1.2.1...HEAD
+[1.2.1]: https://github.com/christopherdally/mileage-tracker/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/christopherdally/mileage-tracker/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/christopherdally/mileage-tracker/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/christopherdally/mileage-tracker/releases/tag/v1.0.0

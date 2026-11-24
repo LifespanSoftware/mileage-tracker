@@ -1,6 +1,6 @@
 # Mileage Tracker
 
-[![Version](https://img.shields.io/badge/version-1.2.0-blue)](CHANGELOG.md) [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+[![Version](https://img.shields.io/badge/version-1.2.1-blue)](CHANGELOG.md) [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 A self-hosted, mobile-first app for logging business mileage and producing monthly claim PDFs.
 
@@ -233,6 +233,7 @@ client/            React PWA built with esbuild
 server/test/       API tests against a real server and database (run.mjs starts them)
 e2e/               Browser test of the whole app (Playwright)
 DOKPLOY.md         Dokploy deployment guide
+HANDOVER.md        Where the project stands, for whoever (or whichever AI session) picks it up next
 ```
 
 ### API
@@ -264,7 +265,7 @@ There is intentionally no sign-up endpoint.
 
 ## Troubleshooting
 
-- **Which version am I running?** It's shown at the bottom of Settings in the app, and `GET /api/health` returns `{"ok":true,"version":"1.2.0"}`. Useful when reporting an issue.
+- **Which version am I running?** It's shown at the bottom of Settings in the app, and `GET /api/health` returns `{"ok":true,"version":"1.2.1"}`. Useful when reporting an issue.
 - **Can't sign in / don't know the admin password:** see [Admin tasks](#admin-tasks) above to reset it from the command line.
 - **Site won't load after `docker compose up`:** check `docker compose logs app` and `docker compose logs db`. The app waits for Postgres to report healthy before starting.
 - **Phone won't install the app or work offline:** this needs HTTPS — see [HTTPS (needed on phones)](#https-needed-on-phones). Plain HTTP only works for browser testing.
